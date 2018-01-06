@@ -1,0 +1,230 @@
+---
+title: "Final Project"
+author: "Yixuan Li"
+date: "12/20/2016"
+output: pdf_document
+---
+
+
+### Libraries needed
+```{r echo=FALSE, results='hide'}
+library(car)
+library(leaps)
+library(glmnet)
+library(pROC)
+library(ggplot2)
+library(randomForest) 
+library(nnet)
+```
+
+### Read data	
+```{r echo=FALSE}
+rm(list=ls())
+dir <- "/Users/liyixuan/Desktop/Modern Data Mining/Data" 
+setwd(dir)
+data.org <- read.csv("student_alcohol_consumption.csv", header = T)
+```
+
+View data first, to see whether there are invalid data in our dataset, and whether the data are in right type for this analysis.
+
+```{r echo=FALSE}
+names(data.org)
+str(data.org)
+dim(data.org)
+sum(is.na(data.org))
+```
+
+There is no missing data, but the response alcohol_con is integer here, which should be an categorical response for us to predict, so we have to change it to factor type in order to implement our analysis.
+
+```{r echo=FALSE}
+data.org$alcohol_con <- as.factor(data.org$alcohol_con)
+str(data.org)
+```
+
+There are a lot of numeric data here, we can see their relationships to see whether we can use the PCA to reduce dimension. First, we have to extract all numeric data, and then use pairs() to see the relationships between them.
+
+```{r echo=FALSE}
+name.num <- sapply(data.org, is.numeric)
+data.num <- data.org[name.num]
+pairs(data.num)
+```
+
+From the plot of pairs above, we can clearly see that there are definitely some linear relationships exists between some variables, which means that PCA can be used here to reduce dimension. 
+
+# PCA
+
+```{r echo=FALSE}
+pca.all <- prcomp(data.num, scale=TRUE)
+# Scree plot of CPVE's
+plot(summary(pca.all)$importance[3, ], pch=16,
+     ylab="Cummulative PVE",
+     xlab="Number of PC's",
+     main="screen plot of PCA with all numeric features")
+```
+
+The screen plot of PCA above told us that 10 PC's are enough to explain more than 90% variance, so we take 10 PC's here, and construct a new dataset replaced by PC's.
+
+```{r echo=FALSE}
+data.pc <- data.frame(pca.all$x[, c(1:10)], data.org[!name.num])  
+names(data.pc)
+```
+
+Then, we split this dataset into training data and testing data for further analysis.
+
+```{r echo=FALSE}
+set.seed(7)
+index.train <- sample(nrow(data.pc),.75*nrow(data.pc),replace=F) # get 75% as train
+data.train <- data.pc[index.train,] # training data
+data.test <- data.pc[-index.train,] # testing data
+```
+
+# Model Select
+
+I: glm first (through LASSO), use lasso and elastic net because glm() can't handle multi-level responses.
+
+```{r echo=FALSE}
+TrainX <- model.matrix(~., data=data.train[, -28])[,-1]
+TrainY <- data.train$alcohol_con
+length(TrainY)
+dim(TrainX)
+levels(TrainY)
+
+TestX <- model.matrix(~.,data=data.test[, -28])[,-1]
+dim(TestX)
+
+lasso.fit <- glmnet(x=TrainX, y=TrainY, family = "multinomial", lambda = 0, alpha=.99)
+
+# summary(lasso.fit)
+# lasso.fit$beta
+
+lasso.pred <- predict(lasso.fit, TestX, type="response")   # gives us three prob's
+lasso.pred.label <- predict(lasso.fit, TestX, type="class") # gives us the three labels
+mce.glm <- mean(lasso.pred.label != data.test$alcohol_con)
+mce.glm
+```
+
+II: RF
+
+```{r echo=FALSE}
+rf.mce <- vector()
+for (i in 1:12) {
+rf.fit <- randomForest(alcohol_con~., data=data.train, mtry=i, ntree=100)
+#plot(rf.fit)
+rf.mce[i] <- rf.fit$err.rate[rf.fit$ntree, 1]    # we only need to pull out the last error
+}
+plot(rf.mce)
+
+rf.fit <- randomForest(alcohol_con~., data=data.train, mtry=8, ntree=100)
+plot(rf.fit)
+rf.pred <- predict(rf.fit,data.test,type="prob")
+rf.pred.label <- predict(rf.fit,data.test,type="class")
+
+mce.rf <- mean(rf.pred.label != data.test$alcohol_con)
+mce.rf
+```
+
+III) multinom() from NNET 
+```{r echo=FALSE}
+glm.fit <- multinom(alcohol_con~., data=data.train)
+# summary(glm.fit)
+glm.pred <- predict(glm.fit, data.test, type="prob")
+glm.pred.label <- predict(glm.fit, data.test, type="class")
+mce.nn <- mean(glm.pred.label != data.test$alcohol_con)
+mce.nn
+```
+
+The MCEs from three models above are similar to those without reducing dimensions by PCA, which means PCA can be used here, because PCA will not cause significant difference on the final result of testing error, and it can reduce dimension at the same time to make the computation faster.
+
+
+
+
+
+
+### Since the MCE above is very high when the response has 5 levels, we now, try to reduce the level to 2, we define alcohol_con as high ("1") when it equal or larger than 4, and as low ("0") otherwise. So we have to construct another dataset that replace the original response with these two level response.
+
+```{r echo=FALSE}
+rm(list=ls())
+dir <- "/Users/liyixuan/Desktop/Modern Data Mining/Data" 
+setwd(dir)
+data.org <- read.csv("student_alcohol_consumption.csv", header = T)
+data1 <- cbind(data.org, data.org$alcohol)
+names(data1)[33] <- "AlcoholHighLow"
+data1$AlcoholHighLow <- factor(ifelse(data1$AlcoholHighLow>= 4, "1", "0") )
+data1 <- data1[-32]
+# str(data1)
+```
+
+
+# PCA
+```{r echo=FALSE}
+name.num <- sapply(data1, is.numeric)
+data.num <- data1[name.num]
+
+pca.all <- prcomp(data.num, scale=TRUE)
+# Scree plot of CPVE's
+plot(summary(pca.all)$importance[3, ], pch=16,
+     ylab="Cummulative PVE",
+     xlab="Number of PC's",
+     main="screen plot of PCA with all numeric features")
+```
+
+The screen plot of PCA above told us that 10 PC's are enough to explain more than 90% variance, so we take 10 PC's here, and construct a new dataset replaced by PC's.
+
+```{r echo=FALSE}
+data.pc <- data.frame(pca.all$x[, c(1:10)], data1[!name.num])  
+# names(data.pc)
+```
+
+Then, we split this dataset into training data and testing data for further analysis.
+
+```{r echo=FALSE}
+set.seed(7)
+index.train <- sample(nrow(data.pc),.75*nrow(data.pc),replace=F) # get 75% as train
+data.train <- data.pc[index.train,] # training data
+data.test <- data.pc[-index.train,] # testing data
+```
+
+# Model Select
+
+I: glm first (through LASSO), use lasso and elastic net.
+
+```{r echo=FALSE}
+TrainX <- model.matrix(~., data=data.train[, -28])[,-1]
+TrainY <- data.train$AlcoholHighLow
+
+TestX <- model.matrix(~.,data=data.test[, -28])[,-1]
+
+lasso.fit <- glmnet(x=TrainX, y=TrainY, family = "binomial", lambda = 0, alpha=.99)
+
+# summary(lasso.fit)
+# lasso.fit$beta
+
+lasso.pred <- predict(lasso.fit, TestX, type="response")   # gives us three prob's
+lasso.pred.label <- predict(lasso.fit, TestX, type="class") # gives us the 2 labels
+mce.glm <- mean(lasso.pred.label != data.test$AlcoholHighLow)
+mce.glm
+```
+
+II: RF
+
+```{r echo=FALSE}
+rf.fit <- randomForest(AlcoholHighLow~., data=data.train, mtry=8, ntree=100)
+plot(rf.fit)
+rf.pred <- predict(rf.fit,data.test,type="prob")
+rf.pred.label <- predict(rf.fit,data.test,type="class")
+
+mce.rf <- mean(rf.pred.label != data.test$AlcoholHighLow)
+mce.rf
+```
+
+III) multinom() from NNET 
+```{r echo=FALSE}
+glm.fit <- multinom(AlcoholHighLow~., data=data.train)
+# summary(glm.fit)
+glm.pred <- predict(glm.fit, data.test, type="prob")
+glm.pred.label <- predict(glm.fit, data.test, type="class")
+mce.nn <- mean(glm.pred.label != data.test$AlcoholHighLow)
+mce.nn
+```
+
+Obviously, the prediction with 2 level response is much preciser than the prediction with 5 level response, the MCE's are less than 0.1 now. Thus, it would be a good way to classify the alcohol level to be high and low ("1" and "0") two levels.
